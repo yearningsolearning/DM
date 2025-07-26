@@ -154,17 +154,17 @@ The system provides comprehensive analysis output:
 - Confusion Matrix with performance annotations
 - Classification Report with detailed metrics
 
-### Example Output
+###  Output
 ```
 FINAL SUMMARY:
 Sampling Method: ADASYN
 Model Name: Balanced Random Forest
-Optimal Threshold: 0.423
-Accuracy: 0.9456
-Precision: 0.8234
-Recall: 0.7891
-F1-Score: 0.8058
-ROC-AUC: 0.9123
+Optimal Threshold: 0.320
+Accuracy: 0.8949
+Precision: 0.3235
+Recall: 0.5238
+F1-Score: 0.4000
+ROC-AUC: 0.7939
 ```
 
 ## Configuration

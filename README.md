@@ -378,7 +378,7 @@ If you use this code in your research, please cite:
   author={Sanskriti khatiwada,Agrima Regmi},
   year={2024},
   description={Multi-Model Machine Learning Pipeline for Semiconductor Manufacturing Failure Prediction},
-  url={https://github.com/your-username/secom-multi-model}
+  url={https://github.com/yearningsolearning/DM/tree/main}
 }
 ```
 

@@ -373,12 +373,12 @@ This project is open-source and available under the MIT License.
 If you use this code in your research, please cite:
 
 ```bibtex
-@software{secom_multi_model_maintenance,
+@software{,
   title={SECOM Multi-Model Predictive Maintenance System},
   author={Sanskriti khatiwada,Agrima Regmi},
-  year={2024},
+  year={2025},
   description={Multi-Model Machine Learning Pipeline for Semiconductor Manufacturing Failure Prediction},
-  url={https://github.com/yearningsolearning/DM/tree/main}
+  url={https://github.com/yearningsolearning/DM}
 }
 ```
 

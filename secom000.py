@@ -7,14 +7,15 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.impute import KNNImputer
 from sklearn.feature_selection import RFE
 from sklearn.metrics import (confusion_matrix, precision_score, recall_score, 
-                           roc_auc_score, classification_report)
+                           roc_auc_score,classification_report)
 from imblearn.ensemble import BalancedRandomForestClassifier
 from imblearn.over_sampling import ADASYN
 from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
 import warnings
 warnings.filterwarnings('ignore')
 
-class SECOM_ADASYN_BalancedRF:
+class SECOM_MultiModel_Analysis:
     def __init__(self):
         self.X = None
         self.y = None
@@ -22,11 +23,11 @@ class SECOM_ADASYN_BalancedRF:
         self.X_test = None
         self.y_train = None
         self.y_test = None
-        self.model = None
+        self.models = {}
         self.results = {}
         
     def load_data(self):
-        "Load SECOM dataset - exact from original code"
+        """Load SECOM dataset - exact from original code"""
         try:
             print("Loading SECOM dataset...")
             data = pd.read_csv(r'C:\machine learn\DM\secom\secom.data', 
@@ -65,7 +66,7 @@ class SECOM_ADASYN_BalancedRF:
         return True
     
     def advanced_preprocessing(self):
-        "preprocessing "
+        """Advanced preprocessing pipeline"""
         print("\nAdvanced preprocessing...")
         
         # Store original feature names
@@ -102,20 +103,20 @@ class SECOM_ADASYN_BalancedRF:
             print(f"Removed {len(high_corr_cols)} highly correlated columns")
         
         # Advanced scaling with RobustScaler
-        scaler = RobustScaler()
-        self.X = pd.DataFrame(scaler.fit_transform(self.X))
+        self.scaler = RobustScaler()
+        self.X = pd.DataFrame(self.scaler.fit_transform(self.X))
         
         # Feature selection with RFE
         print("Using RFE feature selection...")
         estimator = RandomForestClassifier(n_estimators=50, random_state=42)
-        selector = RFE(estimator, n_features_to_select=min(200, self.X.shape[1]))
-        self.X = pd.DataFrame(selector.fit_transform(self.X, self.y))
+        self.selector = RFE(estimator, n_features_to_select=min(200, self.X.shape[1]))
+        self.X = pd.DataFrame(self.selector.fit_transform(self.X, self.y))
         
         print(f"Final feature shape: {self.X.shape}")
         print(f"Missing values: {self.X.isnull().sum().sum()}")
     
     def split_data(self):
-        """Split data with stratification - exact from original"""
+        """Split data with stratification"""
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
         )
@@ -124,35 +125,77 @@ class SECOM_ADASYN_BalancedRF:
         print(f"Training: {self.X_train.shape[0]} samples, Failures: {self.y_train.sum()} ({self.y_train.mean():.2%})")
         print(f"Test: {self.X_test.shape[0]} samples, Failures: {self.y_test.sum()} ({self.y_test.mean():.2%})")
     
-    def apply_adasyn_and_train(self):
-        """Apply ADASYN sampling and train Balanced Random Forest - exact from original"""
-        print("\n--- ADASYN + Balanced Random Forest ---")
-        
-        # Apply ADASYN sampling
+    def apply_adasyn_sampling(self):
+        """Apply ADASYN sampling to training data"""
+        print("\nApplying ADASYN sampling...")
         try:
             adasyn = ADASYN(random_state=42)
-            X_resampled, y_resampled = adasyn.fit_resample(self.X_train, self.y_train)
-            print(f"Resampled shape: {X_resampled.shape}")
-            print(f"Class distribution: {pd.Series(y_resampled).value_counts().to_dict()}")
+            self.X_train_resampled, self.y_train_resampled = adasyn.fit_resample(self.X_train, self.y_train)
+            print(f"Original training shape: {self.X_train.shape}")
+            print(f"Resampled training shape: {self.X_train_resampled.shape}")
+            print(f"Resampled class distribution: {pd.Series(self.y_train_resampled).value_counts().to_dict()}")
         except Exception as e:
-            print(f"Sampling failed: {e}")
-            X_resampled, y_resampled = self.X_train, self.y_train
+            print(f"ADASYN sampling failed: {e}")
+            print("Using original training data...")
+            self.X_train_resampled, self.y_train_resampled = self.X_train, self.y_train
+    
+    def train_balanced_random_forest(self):
+        """Train Balanced Random Forest model"""
+        print("\n--- Training Balanced Random Forest ---")
         
-        # Train Balanced Random Forest 
-        print("Training Balanced Random Forest...")
-        self.model = BalancedRandomForestClassifier(
+        model = BalancedRandomForestClassifier(
             n_estimators=200, 
             max_depth=15, 
-            random_state=42
+            random_state=42,
+            n_jobs=-1
         )
         
-        # Fit model on ADASYN resampled data
-        self.model.fit(X_resampled, y_resampled)
+        # Train on ADASYN resampled data
+        model.fit(self.X_train_resampled, self.y_train_resampled)
         
-        print("Training completed!")
+        self.models['Balanced_RF'] = {
+            'model': model,
+            'name': 'Balanced Random Forest',
+            'sampling': 'ADASYN'
+        }
+        
+        print("Balanced Random Forest training completed!")
+    
+    def train_xgboost_model(self):
+        """Train XGBoost model"""
+        print("\n--- Training XGBoost ---")
+        
+        # Calculate scale_pos_weight for class imbalance
+        scale_pos_weight = (self.y_train == 0).sum() / (self.y_train == 1).sum()
+        
+        # XGBoost model with class imbalance handling
+        model = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            scale_pos_weight=scale_pos_weight,
+            random_state=42,
+            eval_metric='logloss',
+            n_jobs=-1
+        )
+        
+        # Train on ADASYN resampled data
+        model.fit(self.X_train_resampled, self.y_train_resampled)
+        
+        self.models['XGBoost'] = {
+            'model': model,
+            'name': 'XGBoost',
+            'sampling': 'ADASYN'
+        }
+        
+        print("XGBoost training completed!")
+    
+
     
     def optimize_threshold(self, y_true, y_proba, metric='f1'):
-        "Find optimal threshold for classification - exact from original"
+        """Find optimal threshold for classification"""
         thresholds = np.arange(0.1, 0.9, 0.01)
         best_score = 0
         best_threshold = 0.5
@@ -161,7 +204,6 @@ class SECOM_ADASYN_BalancedRF:
             y_pred = (y_proba >= threshold).astype(int)
             
             if metric == 'f1':
-                # Calculate F1 score manually to handle zero division
                 precision = precision_score(y_true, y_pred, zero_division=0)
                 recall = recall_score(y_true, y_pred, zero_division=0)
                 if precision + recall > 0:
@@ -179,23 +221,27 @@ class SECOM_ADASYN_BalancedRF:
         
         return best_threshold, best_score
     
-    def evaluate_model(self):
-        "Evaluate model"
-        print("\nEvaluating model...")
+    def evaluate_model(self, model_key):
+        """Evaluate a specific model"""
+        model_info = self.models[model_key]
+        model = model_info['model']
+        
+        print(f"\nEvaluating {model_info['name']}...")
         
         # Make predictions
-        y_pred = self.model.predict(self.X_test)
-        y_pred_proba = self.model.predict_proba(self.X_test)[:, 1] if hasattr(self.model, 'predict_proba') else None
+        y_pred = model.predict(self.X_test)
+        y_pred_proba = model.predict_proba(self.X_test)[:, 1] if hasattr(model, 'predict_proba') else None
         
-        # Optimize threshold 
+        # Optimize threshold
         if y_pred_proba is not None:
             best_threshold, best_f1 = self.optimize_threshold(self.y_test, y_pred_proba, 'f1')
             y_pred_optimized = (y_pred_proba >= best_threshold).astype(int)
         else:
             best_threshold = 0.5
             y_pred_optimized = y_pred
+            best_f1 = 0
         
-        # Calculate metrics (exact from original)
+        # Calculate metrics
         accuracy = (y_pred_optimized == self.y_test).mean()
         precision = precision_score(self.y_test, y_pred_optimized, zero_division=0)
         recall = recall_score(self.y_test, y_pred_optimized, zero_division=0)
@@ -204,11 +250,11 @@ class SECOM_ADASYN_BalancedRF:
             f1 = 2 * (precision * recall) / (precision + recall)
         roc_auc = roc_auc_score(self.y_test, y_pred_proba) if y_pred_proba is not None else None
         
-        # Store results (exact structure from original)
-        self.results = {
-            'model': self.model,
-            'sampling_method': 'ADASYN',
-            'model_name': 'Balanced Random Forest',
+        # Store results
+        self.results[model_key] = {
+            'model': model,
+            'sampling_method': model_info['sampling'],
+            'model_name': model_info['name'],
             'predictions': y_pred_optimized,
             'predictions_proba': y_pred_proba,
             'best_threshold': best_threshold,
@@ -219,48 +265,105 @@ class SECOM_ADASYN_BalancedRF:
             'roc_auc': roc_auc
         }
         
-        print(f"F1: {f1:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
-        print(f"Optimal threshold: {best_threshold:.3f}")
-        print(f"ROC-AUC: {roc_auc:.4f}")
+        print(f"Results for {model_info['name']}:")
+        print(f"  F1: {f1:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
+        print(f"  Accuracy: {accuracy:.4f}, ROC-AUC: {roc_auc:.4f}")
+        print(f"  Optimal threshold: {best_threshold:.3f}")
         
-        return self.results
+        return self.results[model_key]
+
+    def plot_model_comparison(self):
+        """Plot comparison of all models"""
+        if not self.results:
+            print("No results to plot. Please run evaluation first.")
+            return
+
+        # Create comparison dataframe
+        comparison_data = []
+        for model_key, result in self.results.items():
+            comparison_data.append({
+                'Model': result['model_name'],
+                'Sampling': result['sampling_method'],
+                'F1-Score': result['f1_score'],
+                'Precision': result['precision'],
+                'Recall': result['recall'],
+                'ROC-AUC': result['roc_auc'],
+                'Accuracy': result['accuracy']
+            })
+
+        df_comparison = pd.DataFrame(comparison_data)
+
+        # Plot metrics comparison
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+        metrics = ['F1-Score', 'Precision', 'Recall', 'ROC-AUC', 'Accuracy']
+        model_labels = [f"{row['Model']}" for _, row in df_comparison.iterrows()]
+        colors = ['skyblue', 'lightcoral'][:len(df_comparison)]
+
+        for i, metric in enumerate(metrics):
+            row = i // 3
+            col = i % 3
+
+            values = df_comparison[metric].values
+            bars = axes[row, col].bar(np.arange(len(values)), values, color=colors, width=0.6)
+
+            axes[row, col].set_title(metric, fontweight='bold')
+            axes[row, col].set_ylabel(metric)
+            axes[row, col].set_xticks(np.arange(len(values)))
+            axes[row, col].set_xticklabels(model_labels, ha='center')
+            axes[row, col].set_ylim(0, 1)
+
+            # Add value labels on bars
+            for bar, value in zip(bars, values):
+                axes[row, col].text(bar.get_x() + bar.get_width() / 2,
+                                    bar.get_height() + 0.01,
+                                    f'{value:.3f}',
+                                    ha='center', va='bottom', fontweight='bold')
+
+        # Remove empty subplot
+        fig.delaxes(axes[1, 2])
+
+        plt.tight_layout()
+        plt.show()
+
     
-    def plot_confusion_matrix(self):
-        """Plot confusion matrix - enhanced version"""
-        cm = confusion_matrix(self.y_test, self.results['predictions'])
+    def plot_confusion_matrices(self):
+        """Plot confusion matrices for all models"""
+        n_models = len(self.results)
+        if n_models == 0:
+            print("No results to plot.")
+            return
         
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                   xticklabels=['PASS', 'FAIL'],
-                   yticklabels=['PASS', 'FAIL'])
-        plt.title('Confusion Matrix - ADASYN + Balanced Random Forest')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
+        fig, axes = plt.subplots(1, n_models, figsize=(6*n_models, 5))
+        if n_models == 1:
+            axes = [axes]
         
-        # Add performance metrics
-        precision = self.results['precision']
-        recall = self.results['recall']
-        f1_score = self.results['f1_score']
-        roc_auc = self.results['roc_auc']
-        threshold = self.results['best_threshold']
-        
-        plt.figtext(0.02, 0.02, 
-                   f'Precision: {precision:.4f} | Recall: {recall:.4f} | F1: {f1_score:.4f} | ROC-AUC: {roc_auc:.4f} | Threshold: {threshold:.3f}',
-                   fontsize=9, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
+        for i, (model_key, result) in enumerate(self.results.items()):
+            cm = confusion_matrix(self.y_test, result['predictions'])
+            
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                       xticklabels=['PASS', 'FAIL'],
+                       yticklabels=['PASS', 'FAIL'],
+                       ax=axes[i])
+            
+            axes[i].set_title(f'{result["model_name"]}\n({result["sampling_method"]})')
+            axes[i].set_ylabel('True Label')
+            axes[i].set_xlabel('Predicted Label')
+            
+            # Add metrics below each plot
+            f1 = result['f1_score']
+            precision = result['precision']
+            recall = result['recall']
+            roc_auc = result['roc_auc']
+            
+            axes[i].text(0.5, -0.15, 
+                        f'F1: {f1:.3f} | Prec: {precision:.3f} | Rec: {recall:.3f} | AUC: {roc_auc:.3f}',
+                        transform=axes[i].transAxes, ha='center', fontsize=10,
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
         
         plt.tight_layout()
         plt.show()
-        
-        # Print confusion matrix details
-        tn, fp, fn, tp = cm.ravel()
-        print(f"\nConfusion Matrix Details:")
-        print(f"True Negatives (Correctly predicted PASS): {tn}")
-        print(f"False Positives (Incorrectly predicted FAIL): {fp}")
-        print(f"False Negatives (Incorrectly predicted PASS): {fn}")
-        print(f"True Positives (Correctly predicted FAIL): {tp}")
-    
-
-    
+     
     def show_classification_report(self):
         """Show detailed classification report - exact from original"""
         print("\nDetailed Classification Report:")
@@ -273,10 +376,27 @@ class SECOM_ADASYN_BalancedRF:
             digits=4
         )
         print(class_report)
-
+    
+    def show_feature_importance(self):
+        """Show feature importance for tree-based models"""
+        for model_key, result in self.results.items():
+            model = result['model']
+            
+            if hasattr(model, 'feature_importances_'):
+                print(f"\nTop 10 Feature Importances - {result['model_name']}:")
+                print("-" * 50)
+                
+                importances = model.feature_importances_
+                feature_importance = pd.DataFrame({
+                    'feature': [f'Feature_{i}' for i in range(len(importances))],
+                    'importance': importances
+                }).sort_values('importance', ascending=False)
+                
+                print(feature_importance.head(10).to_string(index=False, float_format='%.4f'))
+    
     def run_complete_analysis(self):
-        """Run the complete analysis - exact pipeline from original"""
-        print("SECOM Predictive Maintenance - ADASYN + Balanced Random Forest")
+        """Run the complete analysis with multiple models"""
+        print("SECOM Predictive Maintenance - Multi-Model Analysis")
         print("=" * 70)
         
         # Step 1: Load data
@@ -284,45 +404,52 @@ class SECOM_ADASYN_BalancedRF:
             print("Failed to load data. Please check file paths.")
             return False
         
-        # Step 2: Advanced preprocessing (exact from original)
+        # Step 2: Advanced preprocessing
         self.advanced_preprocessing()
         
         # Step 3: Split data
         self.split_data()
         
-        # Step 4: Apply ADASYN + Train Balanced Random Forest
-        self.apply_adasyn_and_train()
+        # Step 4: Apply ADASYN sampling
+        self.apply_adasyn_sampling()
         
-        # Step 5: Evaluate model (exact evaluation from original)
-        results = self.evaluate_model()
+        # Step 5: Train all models
+        self.train_balanced_random_forest()
+        self.train_xgboost_model()
         
-        # Step 6: Show detailed results
+        # Step 6: Evaluate all models
+        for model_key in self.models.keys():
+            self.evaluate_model(model_key)
+        
+        # Step 7: Show results and visualizations
+        self.plot_model_comparison()
+        self.plot_confusion_matrices()
+        self.show_feature_importance()
         self.show_classification_report()
         
-
-        # Step 7: Plot visualizations
-        self.plot_confusion_matrix()
-
+        # Step 8: Final summary
+        print("\n" + "="*80)
+        print("FINAL SUMMARY - ALL MODELS")
+        print("="*80)
         
-        print("\n Analysis completed successfully!")
+        best_f1_model = max(self.results.items(), key=lambda x: x[1]['f1_score'])
+        best_auc_model = max(self.results.items(), key=lambda x: x[1]['roc_auc'])
         
-        # Final summary (exact format from original)
-        print(f"\FINAL SUMMARY:")
-        print(f"Sampling Method: {results['sampling_method']}")
-        print(f"Model Name: {results['model_name']}")
-        print(f"Optimal Threshold: {results['best_threshold']:.3f}")
-        print(f"Accuracy: {results['accuracy']:.4f}")
-        print(f"Precision: {results['precision']:.4f}")
-        print(f"Recall: {results['recall']:.4f}")
-        print(f"F1-Score: {results['f1_score']:.4f}")
-        print(f"ROC-AUC: {results['roc_auc']:.4f}")
+        print(f"Best F1-Score: {best_f1_model[1]['model_name']} ({best_f1_model[1]['f1_score']:.4f})")
+        print(f"Best ROC-AUC: {best_auc_model[1]['model_name']} ({best_auc_model[1]['roc_auc']:.4f})")
         
+        for model_key, result in self.results.items():
+            print(f"\n{result['model_name']} ({result['sampling_method']}):")
+            print(f"  F1: {result['f1_score']:.4f} | Precision: {result['precision']:.4f} | Recall: {result['recall']:.4f}")
+            print(f"  Accuracy: {result['accuracy']:.4f} | ROC-AUC: {result['roc_auc']:.4f} | Threshold: {result['best_threshold']:.3f}")
+        
+        print("\nAnalysis completed successfully!")
         return True
 
 
 def main():
-    # Initialize and run analysis
-    secom_analyzer = SECOM_ADASYN_BalancedRF()
+    """Initialize and run analysis"""
+    secom_analyzer = SECOM_MultiModel_Analysis()
     success = secom_analyzer.run_complete_analysis()
     
     if success:
